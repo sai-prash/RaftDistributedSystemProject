@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
 	"time"
@@ -49,13 +50,17 @@ var raftInfo RaftInfo
 
 //var nodeList []string = []string{"127.0.0.1:5555", "127.0.0.1:5556"}
 
-var nodeList []string = []string{"Node1", "Node2", "Node3", "Node4", "Node5"}
+var nodeList []string = []string{"node1", "node2", "node3", "node4", "node5"}
 
 var currentAcceptedVote = 0
 var currentRejectedVote = 0
 
+var leaderInfo string
+
 func main() {
 	// nodeList=["", "", "", "", ""]
+
+	//time.Sleep(100000 * time.Millisecond)
 	raftInfo = loadRaftJson()
 
 	if nodeName == "" {
@@ -63,6 +68,15 @@ func main() {
 	}
 	fmt.Println("---Node Name---" + nodeName)
 	fmt.Println(raftInfo)
+
+	if nodeName == "Node1" {
+		//time.Sleep(2000 * time.Millisecond)
+		//raftInfo.Timeout += 1000
+		currentServerType = Leader
+	}
+	//Add random timeout
+	raftInfo.Timeout += rand.Intn(100)
+	fmt.Println("Random timeout value", raftInfo.Timeout)
 
 	p := make([]byte, 2048)
 	addr := net.UDPAddr{
@@ -83,7 +97,8 @@ func main() {
 }
 
 func loadRaftJson() RaftInfo {
-	jsonFile, _ := os.Open("raft.json")
+	jsonFile, err := os.Open("raft.json")
+	fmt.Println(err)
 	defer jsonFile.Close()
 	byteValue, _ := ioutil.ReadAll(jsonFile)
 	var raftInfo RaftInfo
@@ -112,7 +127,7 @@ func healthCheckTimer() {
 			case <-done:
 
 				if currentServerType == Leader && curTime.Sub(previousTime) > time.Duration(raftInfo.HeartBeat)*time.Millisecond {
-					fmt.Println("Sending HeartBeat process")
+					fmt.Println("-----Starting HeartBeat process-----")
 					raftInfo.CurrentTerm += 1
 					previousTime = time.Now()
 					//Send HeartBeat
@@ -134,7 +149,7 @@ func healthCheckTimer() {
 					previousTime = time.Now()
 					if currentServerType != Candidate {
 						currentServerType = Candidate
-						go startVotingProcess()
+						startVotingProcess()
 					}
 
 				}
@@ -172,8 +187,11 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 				if currentServerType != Follower && reqData.Term > raftInfo.CurrentTerm {
 					currentServerType = Follower
 				}
+				raftInfo.CurrentTerm = reqData.Term
+				leaderInfo = reqData.Sender_name //Update LeaderInfo
 				//go sendHeartBeatResponse(reqData, ser, remoteaddr)
 			} else if reqData.Request == "VOTE_REQUEST" {
+				previousTime = time.Now()
 				go sendVoteResponse(reqData, ser, remoteaddr)
 			} else if reqData.Request == "VOTE_ACK" {
 				fmt.Println("-----------------" + reqData.Value)
@@ -188,6 +206,7 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 						currentServerType = Leader
 						currentAcceptedVote = 0
 						currentRejectedVote = 0
+						go sendHeartBeat() //TO reset all candidate nodes
 					}
 				} else {
 					currentRejectedVote += 1
@@ -199,7 +218,20 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 				}
 				fmt.Println(currentServerType)
 			} else if reqData.Request == "CONVERT_FOLLOWER" { //----ADD ALL CONTROLLER API HERE----
+				fmt.Println("-----------Converting to FOLLOWER--------")
 				currentServerType = Follower
+			} else if reqData.Request == "LEADER_INFO" {
+				var leaderMsg jsonMessage
+				leaderMsg.Sender_name = nodeName
+				leaderMsg.Key = "LEADER"
+				leaderMsg.Value = leaderInfo
+				leaderMsg.Request = "LEADER_INFO"
+				jsonResp, _ := json.Marshal(leaderMsg)
+				remoteaddr.Port = 5555
+				_, err = ser.WriteToUDP([]byte(jsonResp), remoteaddr)
+				if err != nil {
+					fmt.Printf("Couldn't send response %v", err)
+				}
 			}
 
 		}
@@ -222,22 +254,25 @@ func startVotingProcess() {
 	//loop to all node
 	for _, v := range nodeList {
 		if v == nodeName { //Skip if current node
-			//continue
+			continue
 		}
-		conn, err := net.Dial("udp", v+port)
-		if err != nil {
-			fmt.Printf("Some error %v", err)
-			return
-		}
-		fmt.Fprintf(conn, string(jsonReq))
+		go func(v string) {
+			conn, err := net.Dial("udp", v+port)
+			if err != nil {
+				fmt.Printf("Some error %v", err)
+				return
+			}
+			fmt.Fprintf(conn, string(jsonReq))
 
-		_, err = bufio.NewReader(conn).Read(p)
-		if err == nil {
-			fmt.Printf("%s\n", p)
-		} else {
-			fmt.Printf("Some error %v\n", err)
-		}
-		conn.Close()
+			_, err = bufio.NewReader(conn).Read(p)
+			if err == nil {
+				fmt.Printf("%s\n", p)
+			} else {
+				fmt.Printf("Some error %v\n", err)
+			}
+			conn.Close()
+		}(v)
+
 	}
 }
 
@@ -253,24 +288,28 @@ func sendHeartBeat() {
 
 	//loop to all node
 	for _, v := range nodeList {
-		fmt.Println("Sending HearBeat to: " + v)
 		if v == nodeName { //Skip if current node
 			continue
 		}
-		conn, err := net.Dial("udp", v+port)
-		if err != nil {
-			fmt.Printf("Some error %v", err)
-			return
-		}
-		fmt.Fprintf(conn, string(jsonResp))
+		go func(v string) {
+			fmt.Println("Sending HearBeat to: " + v)
 
-		//_, err = bufio.NewReader(conn).Read(p)
-		if err == nil {
-			fmt.Printf("%s\n", p)
-		} else {
-			fmt.Printf("Some error %v\n", err)
-		}
-		conn.Close()
+			conn, err := net.Dial("udp", v+port)
+			if err != nil {
+				fmt.Printf("Some error %v", err)
+				return
+			}
+			fmt.Fprintf(conn, string(jsonResp))
+
+			//_, err = bufio.NewReader(conn).Read(p)
+			if err == nil {
+				fmt.Printf("%s\n", p)
+			} else {
+				fmt.Printf("Some error %v\n", err)
+			}
+			conn.Close()
+		}(v)
+
 	}
 
 }
@@ -280,15 +319,20 @@ func sendHeartBeatResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDP
 }
 
 func sendVoteResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr) {
+	previousTime = time.Now()
 	var voteRes jsonMessage
 	voteRes.Sender_name = nodeName
 	voteRes.Key = "Vote"
 	voteRes.Request = "VOTE_ACK"
-	if reqData.Term >= raftInfo.CurrentTerm {
+	voteRes.Term = raftInfo.CurrentTerm
+	if reqData.Term > raftInfo.CurrentTerm {
 		voteRes.Value = "true"
+		raftInfo.VotedFor = addr.String()
+		raftInfo.CurrentTerm = reqData.Term
 	} else {
 		voteRes.Value = "false"
 	}
+
 	jsonResp, err := json.Marshal(voteRes)
 	if err != nil {
 		fmt.Printf("Couldn't create json  %v", err)

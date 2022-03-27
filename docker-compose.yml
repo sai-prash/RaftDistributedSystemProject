@@ -1,50 +1,98 @@
-version: "3.8"
+version: "3.9"
+
 
 services:
   node1:
-    build: .
+    build: Node/.
     restart: always
-    container_name: node1
+    container_name: Node1
     ports:
-      - "8080:8080"
+      - "5555:5555"
     links:
       - node3
       - node2
+      - node4
+      - node5
+      - controller
+    environment:
+      - node_name=Node1
   node2:
-    build: .
+    build: Node/.
     restart: always
-    container_name: node2
+    container_name: Node2
     ports:
-      - "8081:8080"
-   
+      - "5556:5555"
+    environment:
+      - node_name=Node2
   node3:
-    build: .
+    build: Node/.
     restart: always
-    container_name: node3
+    container_name: Node3
     ports:
-      - "8082:8080"
+      - "5557:5555"
+    environment:
+      - node_name=Node3
+  node4:
+    build: Node/.
+    restart: always
+    container_name: Node4
+    ports:
+      - "5558:5555"
+    environment:
+      - node_name=Node4
+  node5:
+    build: Node/.
+    restart: always
+    container_name: Node5
+    ports:
+      - "5559:5555"
+    environment:
+      - node_name=Node5
+    
+  controller:
+      container_name: Controller
+      build: Controller/.
+      stdin_open: true
  
-  # mongo:
-  #   image: mongo
-  #   # restart: always
-  #   environment:
-  #     MONGO_INITDB_ROOT_USERNAME: root
-  #     MONGO_INITDB_ROOT_PASSWORD: example
-  #   ports:
-  #     - "27017:27017"
-  # mongo2:
-  #   image: mongo
-  #   # restart: always
-  #   environment:
-  #     MONGO_INITDB_ROOT_USERNAME: root
-  #     MONGO_INITDB_ROOT_PASSWORD: example
-  #   ports:
-  #     - "27018:27017"
-  # mongo3:
-  #   image: mongo
-  #   # restart: always
-  #   environment:
-  #     MONGO_INITDB_ROOT_USERNAME: root
-  #     MONGO_INITDB_ROOT_PASSWORD: example
-  #   ports:
-  #     - "27019:27017"
+
+# services:
+#   Node1:
+#     build: .
+#     restart: always
+#     container_name: Node1
+#     ports:
+#       - "8080:8080"
+# version: "3.7"
+# services:
+#    Node1:
+#      container_name: Node1
+#      build: .
+#      environment:
+#       - node_name=Node1
+
+#    Node2:
+#      container_name: Node2
+#      build: Node/.
+#      environment:
+#       - node_name=Node2
+
+#    Node3:
+#        container_name: Node3
+#        build: Node/.
+#        environment:
+#         - node_name=Node3
+
+#    node4:
+#        container_name: Node4
+#        build: Node/.
+#        environment:
+#         - node_name=Node4
+
+#    node5:
+#        container_name: Node5
+#        build: Node/.
+#        environment:
+#         - node_name=Node5
+
+   #Do not change the part below
+  

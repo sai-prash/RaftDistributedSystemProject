@@ -1,0 +1,4 @@
+sudo  docker build -t test2 --no-cache
+sudo docker container list
+sudo docker run -d -p 5555:5555 test2
+sudo docker run -it test2 sh
