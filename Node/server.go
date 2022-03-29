@@ -75,7 +75,6 @@ var currentRejectedVote = 0
 var leaderInfo string
 
 func main() {
-	// nodeList=["", "", "", "", ""]
 
 	//time.Sleep(100000 * time.Millisecond)
 	raftInfo = loadRaftJson()
@@ -372,8 +371,6 @@ func sendVoteResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr)
 //Hotel Reservation source code
 
 func getReservation(w http.ResponseWriter, r *http.Request) {
-	log.Println("dsdsdsdssdds")
-	//connection()
 	jsonFile, _ := os.Open("./data.json")
 	defer jsonFile.Close()
 	byteValue, _ := ioutil.ReadAll(jsonFile)
@@ -389,16 +386,15 @@ func getReservation(w http.ResponseWriter, r *http.Request) {
 func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("INSIDE CHECK N UPDATE")
-	NodeList := [3]string{"http://node3:8080", "http://node2:8080", "http://node1:8080"}
-
+	//NodeList := [3]string{"http://node3:8080", "http://node2:8080", "http://node1:8080"}
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		panic(err)
 	}
 
-	for i := 0; i < 3; i++ {
-		fmt.Println(NodeList[i] + "/updateNodes")
-		req, err := http.NewRequest("POST", NodeList[i]+"/updateNodes", bytes.NewBuffer([]byte(body)))
+	for i := 0; i < len(nodeList); i++ {
+		fmt.Println("http://" + nodeList[i] + ":8080" + "/updateNodes")
+		req, err := http.NewRequest("POST", "http://"+nodeList[i]+":8080"+"/updateNodes", bytes.NewBuffer([]byte(body)))
 		req.Header.Set("Content-Type", "application/json")
 		client := &http.Client{}
 		resp, err := client.Do(req)
@@ -407,7 +403,6 @@ func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fmt.Println("response Status:", resp.Status)
-		fmt.Println("response Headers:", resp.Header)
 	}
 
 }
