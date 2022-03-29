@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Hotel Reservation </title>
+<script src="js/index.js"></script>
+</head>
+<body>
+
+<h1>Hotel Reservation System</h1>
+  <div>
+    <label for="RoomType">Choose a room Type:</label>
+      <select name="RoomType" id="RoomType">
+        <option value="Studio">Studio</option>
+        <option value="Premium">Premium</option>
+        <option value="Queen">Queen</option>
+        <option value="King">King</option>
+      </select>
+     <br><br>
+     <button onclick="GetHotelReservation()">Search</button>
+     <div class="container">
+      <table class="table" style="padding: 20px; margin: auto;">
+        <thead>
+          <tr>
+            <th>Available Dates</th>
+          </tr>
+        </thead>
+        <tbody id="data" style="display: grid; grid-template-columns: 1fr 1fr 1fr;">
+
+        </tbody>
+      </table>
+      <div style="margin: auto;display: inline-flex;">
+          <button id='book' style="display: none;" onclick="bookHotel()">Book</button>
+      </div>
+    </div>
+
+    <style>
+    h1 {text-align: center;}
+    p {text-align: center;}
+    div {text-align: center;}
+    table tr {padding: 15px;}
+    </style>
+  </div>
+</body>
+<script type="text/javascript">
+  function GetHotelReservation() {
+  RoomType = document.querySelector("#RoomType").value;
+     fetch("/getReservation?RoomType="+RoomType)
+         .then(response => {
+            if (!response.ok) {
+             throw new Error(`Request failed with status ${reponse.status}`)
+             }
+             return response.json()
+         })
+         .then(data => {
+             if (data.Rooms.length > 0) {
+                 var temp = "";
+                   let htmlText = "";
+                   let radio = "<label><input type='radio' id='abcd'>abcd</label>";
+                 data.Rooms.forEach((itemData) => {
+          itemData.Dates.forEach((eachItem) => {
+                         if (itemData.Type==RoomType){
+                            htmlText = "<label><input type='radio' name = 'hotels' id='" + eachItem + "'>" + eachItem + "</label>";
+                            temp += "<tr><td>" + htmlText + "</td></tr>";
+                         
+                        }
+                    })                                                                                        
+                }); 
+                document.getElementById('data').innerHTML = temp;
+                document.getElementById('book').style.display = 'block';
+              }
+        })
+        .catch(error => console.log(error))
+   }
+    function bookHotel(){
+        dateTosend=document.querySelector('input[name="hotels"]:checked').id;
+        Dates = []
+        Dates.push(dateTosend)
+        dataJson = {"Dates": Dates, "RoomType": document.querySelector("#RoomType").value}
+        console.log(dateTosend)
+        fetch("/makeReservation", {
+         method: "POST",
+        headers: {'Content-Type': 'application/json'}, 
+        body: JSON.stringify(dataJson)
+            }).then(res => {
+                console.log("Request complete! response:", res);
+                alert("Booking Success");
+                location.reload();
+                });
+    }
+
+</script>
+</html>
