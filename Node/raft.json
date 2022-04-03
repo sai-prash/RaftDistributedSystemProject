@@ -1,1 +1,1 @@
-{"CurrentTerm": "0", "VotedFor": "-", "Log": "", "Timeout": 3000, "HeartBeat": 1000}
+{"CurrentTerm": "0", "VotedFor": "-", "Log": "", "Timeout": 300, "HeartBeat": 100}
