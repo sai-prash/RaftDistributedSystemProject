@@ -17,12 +17,18 @@ import (
 )
 
 type RaftInfo struct {
-	CurrentTerm int      `json: "CurrentTerm"`
-	VotedFor    string   `json: "VotedFor"`
-	Log         []string `json: "Log"`
-	LogTerm     []int    `json: "LogTerm"`
-	Timeout     int      `json: "Timeout"`
-	HeartBeat   int      `json: "HeartBeat"`
+	CurrentTerm int       `json: "CurrentTerm"`
+	VotedFor    string    `json: "VotedFor"`
+	Log         []LogInfo `json: "Log"`
+	LogTerm     []int     `json: "LogTerm"`
+	Timeout     int       `json: "Timeout"`
+	HeartBeat   int       `json: "HeartBeat"`
+}
+
+type LogInfo struct {
+	Key   string `json: "Key"`
+	Value string `json: "Value"`
+	Term  int    `json: "Term"`
 }
 
 type jsonMessage struct {
@@ -31,10 +37,10 @@ type jsonMessage struct {
 	Term         int    `json: "term"`
 	Key          string `json: "key"`
 	Value        string `json: "value"`
-	prevLogIndex int    `json: prevLogIndex`
-	leaderCommit string `json: leaderCommit`
-	prevLogTerm  int    `json: prevLogTerm`
-	entries      string `json: entries`
+	Entries      string `json: entries`
+	PrevLogIndex int    `json: prevLogIndex`
+	LeaderCommit string `json: leaderCommit`
+	PrevLogTerm  int    `json: prevLogTerm`
 }
 
 type Rooms struct {
@@ -50,10 +56,6 @@ type Booking struct {
 	RoomType string   `json: "RoomType"`
 	Dates    []string `json: "Dates"`
 }
-
-// type voteReq struct {
-// 	Vote bool `json: "vote"`
-// }
 
 var nodeName string = os.Getenv("node_name")
 var handleReq bool = true
@@ -99,7 +101,7 @@ func main() {
 	}
 	fmt.Println("---Node Name---" + nodeName)
 	fmt.Println(raftInfo)
-	//To generate random timeout, due to a bug we are generating it for every node--
+	//To generate random timeout, due to a bug we are generating random timeout sperately for every node--
 	if nodeName == "Node1" {
 		raftInfo.Timeout += rand.Intn(20)
 	}
@@ -115,9 +117,6 @@ func main() {
 	if nodeName == "Node5" {
 		raftInfo.Timeout += rand.Intn(60)
 	}
-
-	//Add random timeout
-	//raftInfo.Timeout += rand.Intn(100)
 
 	fmt.Println("Random timeout value", raftInfo.Timeout)
 
@@ -182,9 +181,7 @@ func healthCheckTimer() {
 
 				if handleReq && currentServerType == Leader && curTime.Sub(previousTime) > time.Duration(raftInfo.HeartBeat)*time.Millisecond {
 					fmt.Println("-----Sending HeartBeat-----")
-					//raftInfo.CurrentTerm += 1
 					previousTime = time.Now()
-					//Send HeartBeat
 					sendHeartBeat()
 
 				}
@@ -236,44 +233,56 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 				if currentServerType != Follower && reqData.Term > raftInfo.CurrentTerm {
 					currentServerType = Follower
 				}
-				raftInfo.CurrentTerm = reqData.Term
-				leaderInfo = reqData.Sender_name //Update LeaderInfo
 
-				if len(reqData.entries) > 0 && currentServerType != Leader {
+				leaderInfo = reqData.Sender_name //Update LeaderInfo
+				if reqData.Entries != "" && currentServerType != Leader {
 
 					var leaderMsg jsonMessage
 					leaderMsg.Sender_name = nodeName
 					leaderMsg.Key = "SUCCESS"
 					leaderMsg.Request = "APPEND_REPLY"
-					jsonResp, _ := json.Marshal(leaderMsg)
-					remoteaddr.Port = 5555
 
+					remoteaddr.Port = 5555
 					if err != nil {
 						fmt.Printf("Couldn't send response %v", err)
 					}
-					if raftInfo.CurrentTerm > reqData.Term || reqData.prevLogIndex > len(raftInfo.Log) {
+
+					if raftInfo.CurrentTerm > reqData.Term || reqData.PrevLogIndex > len(raftInfo.Log) {
+						fmt.Println("Retry APPEND RPC FOR NODE", nodeName, "Index", reqData.PrevLogIndex, len(raftInfo.Log))
 						leaderMsg.Value = "false"
+					} else if reqData.PrevLogIndex < len(raftInfo.Log) {
+						leaderMsg.Value = "false"
+						if reqData.Term > raftInfo.Log[reqData.PrevLogIndex].Term {
+							raftInfo.Log = raftInfo.Log[:reqData.PrevLogIndex]
+						}
 					} else {
-						raftInfo.Log = append(raftInfo.Log, reqData.Request)
+						var logObj LogInfo
+						logObj.Key = reqData.Key
+						logObj.Value = reqData.Entries
+						logObj.Term = reqData.Term
+						raftInfo.Log = append(raftInfo.Log, logObj)
 						leaderMsg.Value = "true"
 						commitIndex++
 					}
+					jsonResp, _ := json.Marshal(leaderMsg)
 					_, err = ser.WriteToUDP([]byte(jsonResp), remoteaddr)
 				}
-				//go sendHeartBeatResponse(reqData, ser, remoteaddr)
+				raftInfo.CurrentTerm = reqData.Term // UPDATE THE TERM
 			} else if reqData.Request == "APPEND_REPLY" {
+				nodeID, _ := strconv.Atoi(strings.Split(reqData.Sender_name, "Node")[1])
 				if currentServerType == Leader {
-					nodeID, _ := strconv.Atoi(strings.Split(reqData.Sender_name, "Node")[1])
 					if reqData.Value == "true" {
-
-						matchIndex[nodeID-1] = nextIndex[nodeID-1] - 1
-						commitIndexMap[reqData.Term]++
-						if commitIndexMap[reqData.Term] == 2 { //if 2 other server have sent a response, commit since we have majority
-							commitIndex++
+						//---IF LEN IS LOWER THAN THE CURRENT LOG
+						if len(raftInfo.Log)-1 > nextIndex[nodeID-1] {
+							nextIndex[nodeID-1]++
+							log.Println("UPDATING APPEND RPC FOR NODE", nodeID, "Index", nextIndex[nodeID-1])
+							retryAppendRPC(strings.Split(reqData.Sender_name, "Node")[1], nextIndex[nodeID-1])
 						}
 					} else {
-						nextIndex[nodeID-1]--
+						//DECREASE THE NEXT NODE INDEX AND RETRY
+						nextIndex[nodeID-1] -= 2
 						//Retry APPEND RPC
+						go retryAppendRPC(strings.Split(reqData.Sender_name, "Node")[1], nextIndex[nodeID-1])
 					}
 
 				}
@@ -307,7 +316,6 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 				//fmt.Println(currentServerType)
 			} else if reqData.Request == "STORE" {
 				if currentServerType == Follower {
-					//
 					var leaderMsg jsonMessage
 					leaderMsg.Sender_name = nodeName
 					leaderMsg.Key = "LEADER"
@@ -321,13 +329,17 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 						fmt.Printf("Couldn't send response %v", err)
 					}
 				} else if currentServerType == Leader {
-					raftInfo.CurrentTerm += 1
-					raftInfo.Log = append(raftInfo.Log, "{ \"term\":"+strconv.Itoa(raftInfo.CurrentTerm)+",\"key\":\""+reqData.Key+"\",\"value\":\""+reqData.Value+"\"}")
+					//raftInfo.CurrentTerm += 1
+					var logObj LogInfo
+					logObj.Term = raftInfo.CurrentTerm
+					logObj.Key = reqData.Key
+					logObj.Value = reqData.Value
+					raftInfo.Log = append(raftInfo.Log, logObj)
 					//----TODO SEND RPC CALL TO ALL NODES
-					sendappendRPCRequest(reqData)
+					sendappendRPCRequest()
 				}
 			} else if reqData.Request == "RETRIEVE" {
-				if currentServerType != Leader {
+				if false && currentServerType != Leader {
 					//
 					var leaderMsg jsonMessage
 					leaderMsg.Sender_name = nodeName
@@ -341,10 +353,15 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 						fmt.Printf("Couldn't send response %v", err)
 					}
 				} else {
+
 					var leaderMsg jsonMessage
 					leaderMsg.Sender_name = nodeName
 					leaderMsg.Key = "COMMITED_LOGS"
-					leaderMsg.Value = "[" + strings.Join(raftInfo.Log, ",") + "]"
+					var resultArray []string
+					for _, v := range raftInfo.Log {
+						resultArray = append(resultArray, "{\"Key\":\""+v.Key+"\" ,\"Value\":\""+v.Value+"\" ,\"Term\""+strconv.Itoa(v.Term)+"}")
+					}
+					leaderMsg.Value = "[" + strings.Join(resultArray, ",") + "]"
 					leaderMsg.Request = "RETRIEVE"
 					jsonResp, _ := json.Marshal(leaderMsg)
 					remoteaddr.Port = 5555
@@ -358,6 +375,7 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 		//----ADD ALL CONTROLLER API HERE----
 		if reqData.Request == "CONVERT_FOLLOWER" {
 			fmt.Println("-----------Converting to FOLLOWER--------")
+			previousTime = time.Now() // To reset timeout
 			currentServerType = Follower
 			handleReq = true
 		} else if reqData.Request == "LEADER_INFO" {
@@ -383,26 +401,28 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 	}
 }
 
-func sendappendRPCRequest(reqData jsonMessage) {
+func sendappendRPCRequest() {
 	for _, v := range nodeListID {
 		tmp, _ := strconv.Atoi(v) // tmp contains the ID
 		v = "Node" + v
-		log.Println(v, nodeName, v == nodeName)
 		if v == nodeName { //Skip if current node
 			continue
 		}
+		nextIndex[tmp-1]++
 		var msg jsonMessage
 		msg.Sender_name = nodeName
 		msg.Request = "APPEND_RPC"
+		msg.Key = raftInfo.Log[len(raftInfo.Log)-1].Key
+		msg.Entries = raftInfo.Log[len(raftInfo.Log)-1].Value
 		msg.Term = raftInfo.CurrentTerm
-		msg.entries = "{ \"term\":" + strconv.Itoa(raftInfo.CurrentTerm) + ",\"key\":\"" + reqData.Key + "\",\"value\":\"" + reqData.Value + "\"}"
-		msg.prevLogTerm = raftInfo.CurrentTerm - 1 // TODO CHECK
 
-		msg.prevLogIndex = nextIndex[tmp-1] - 1
-		jsonReq, _ := json.Marshal(msg)
-
+		msg.PrevLogIndex = nextIndex[tmp-1] - 1 //Check nad remove one
+		msg.PrevLogIndex = len(raftInfo.Log) - 1
+		jsonReq, err2 := json.Marshal(msg)
+		if err2 != nil {
+			fmt.Println("ERRRORRRR", err2.Error())
+		}
 		go func(v string) {
-
 			conn, err := net.Dial("udp", v+port)
 			if err != nil {
 				fmt.Printf("Some error %v", err)
@@ -418,6 +438,40 @@ func sendappendRPCRequest(reqData jsonMessage) {
 		}(v)
 
 	}
+}
+
+func retryAppendRPC(nodeListID string, index int) {
+
+	v := nodeListID
+	tmp, _ := strconv.Atoi(v) // tmp contains the ID
+	v = "Node" + v
+
+	if index < 0 {
+		index = 0
+	}
+	var msg jsonMessage
+	msg.Sender_name = nodeName
+	msg.Request = "APPEND_RPC"
+	msg.Term = raftInfo.CurrentTerm
+	msg.Key = raftInfo.Log[index].Key
+	msg.Entries = raftInfo.Log[index].Value
+	msg.PrevLogTerm = raftInfo.Log[index].Term // TODO CHECK
+
+	msg.PrevLogIndex = nextIndex[tmp-1]
+	msg.PrevLogIndex = index
+	jsonReq, _ := json.Marshal(msg)
+	conn, err := net.Dial("udp", v+port)
+	if err != nil {
+		fmt.Printf("Some error %v", err)
+		return
+	}
+	fmt.Fprintf(conn, string(jsonReq))
+	if err == nil {
+		//fmt.Printf("%s\n", p)
+	} else {
+		fmt.Printf("Some error %v %s\n", err)
+	}
+	conn.Close()
 }
 
 func startVotingProcess() {
@@ -496,17 +550,12 @@ func sendHeartBeat() {
 
 }
 
-func sendHeartBeatResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr) {
-	//Add heartBeat response if needed
-}
-
 func sendVoteResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr) {
 	previousTime = time.Now()
 	var voteRes jsonMessage
 	voteRes.Sender_name = nodeName
 	voteRes.Key = "Vote"
 	voteRes.Request = "VOTE_ACK"
-	fmt.Println("----", reqData.Term, raftInfo.CurrentTerm)
 	if reqData.Term > raftInfo.CurrentTerm {
 		voteRes.Value = "true"
 		raftInfo.VotedFor = addr.String()
@@ -530,8 +579,8 @@ func sendVoteResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr)
 //Hotel Reservation source code
 
 func getReservation(w http.ResponseWriter, r *http.Request) {
-	if currentServerType != Leader {
-		port := getPort()
+	if currentServerType != Leader { //Redirect to leader node
+		port := getLeaderPort()
 		log.Println(("http://localhost:" + port))
 		http.Redirect(w, r, "http://localhost:"+port, 303)
 		return
@@ -544,14 +593,27 @@ func getReservation(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal([]byte(byteValue), &result)
 	w.Header().Set("Content-Type", "application/json")
 	jsonResp, _ := json.Marshal(result)
+
+	//send log all log
+	var j jsonMessage
+	j.Key = "NodeGETCommand"
+	keys, _ := r.URL.Query()["RoomType"]
+
+	j.Value = string("RoomType:" + keys[0])
+	var logObj LogInfo
+	logObj.Key = j.Key
+	logObj.Value = j.Value
+	logObj.Term = raftInfo.CurrentTerm
+	raftInfo.Log = append(raftInfo.Log, logObj)
+	sendappendRPCRequest()
+
 	w.Write(jsonResp)
 
 }
 
 func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 	if currentServerType != Leader {
-		port := getPort()
-		log.Println(("http://localhost:" + port))
+		port := getLeaderPort()
 		http.Redirect(w, r, "http://localhost:"+port, http.StatusSeeOther)
 		return
 	}
@@ -578,17 +640,18 @@ func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//Update current Term and send to update all log
-	raftInfo.CurrentTerm += 1
 	var j jsonMessage
-	j.Key = "NodeUpdate"
+	j.Key = "NodeWriteCommand"
 	j.Value = string(body)
-	raftInfo.Log = append(raftInfo.Log, "{ \"term\":"+strconv.Itoa(raftInfo.CurrentTerm)+",\"key\":\""+j.Key+"\",\"value\":\""+j.Value+"\"}")
-	sendappendRPCRequest(j)
-
+	var logObj LogInfo
+	logObj.Key = j.Key
+	logObj.Value = j.Value
+	logObj.Term = raftInfo.CurrentTerm
+	raftInfo.Log = append(raftInfo.Log, logObj)
+	sendappendRPCRequest()
 }
 
 func updateNodes(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("------------Updating NODES----------")
 
 	jsonFile, _ := os.Open("data.json")
 	defer jsonFile.Close()
@@ -605,7 +668,6 @@ func updateNodes(w http.ResponseWriter, r *http.Request) {
 	log.Println(string(body))
 	var b Booking
 	err = json.Unmarshal([]byte(body), &b)
-	fmt.Println("---", b)
 
 	for i := 0; i < len(rmType); i++ {
 		fmt.Println("King", rmType[i].Type)
@@ -613,7 +675,6 @@ func updateNodes(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		dates := rmType[i].Dates
-		fmt.Println("")
 		for j := 0; j < len(dates); j++ {
 			if contains(b.Dates, dates[j]) {
 				dates = append(dates[:j], dates[j+1:]...)
@@ -631,27 +692,9 @@ func updateNodes(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// func serveFile(w http.ResponseWriter, r *http.Request) {
-// 	if currentServerType != Leader {
-// 		port := getPort()
-// 		http.Redirect(w, r, "http://localhost:"+port, http.StatusSeeOther)
-// 		return
-// 	}
-// 	http.ServeFile(w, r, "./index.html")
-// }
-
-// func serveFile2(w http.ResponseWriter, r *http.Request) {
-// 	if currentServerType != Leader {
-// 		port := getPort()
-// 		http.Redirect(w, r, "http://localhost:"+port, http.StatusSeeOther)
-// 		return
-// 	}
-// 	http.ServeFile(w, r, "./index.html")
-// }
-
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	if currentServerType != Leader {
-		port := getPort()
+		port := getLeaderPort()
 		log.Println(("http://localhost:" + port))
 		http.Redirect(w, r, "http://localhost:"+port, 303)
 		return
@@ -669,7 +712,7 @@ func contains(s []string, t string) bool {
 	return false
 }
 
-func getPort() string {
+func getLeaderPort() string {
 	switch leaderInfo {
 
 	case "Node1":
