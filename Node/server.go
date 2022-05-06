@@ -256,6 +256,7 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 							raftInfo.Log = raftInfo.Log[:reqData.PrevLogIndex]
 						}
 					} else {
+						lastApplied++
 						var logObj LogInfo
 						logObj.Key = reqData.Key
 						logObj.Value = reqData.Entries
@@ -263,6 +264,7 @@ func handleRequest(ser *net.UDPConn, p []byte) {
 						raftInfo.Log = append(raftInfo.Log, logObj)
 						leaderMsg.Value = "true"
 						commitIndex++
+
 					}
 					jsonResp, _ := json.Marshal(leaderMsg)
 					_, err = ser.WriteToUDP([]byte(jsonResp), remoteaddr)
@@ -484,6 +486,7 @@ func startVotingProcess() {
 	msg.Sender_name = nodeName
 	msg.Request = "VOTE_REQUEST"
 	msg.Term = raftInfo.CurrentTerm
+	msg.PrevLogIndex = len(raftInfo.Log) - 1
 	jsonReq, _ := json.Marshal(msg)
 
 	//loop to all node
@@ -556,14 +559,15 @@ func sendVoteResponse(reqData jsonMessage, conn *net.UDPConn, addr *net.UDPAddr)
 	voteRes.Sender_name = nodeName
 	voteRes.Key = "Vote"
 	voteRes.Request = "VOTE_ACK"
-	if reqData.Term > raftInfo.CurrentTerm {
+	//Check if term is lower or log index is lower
+	if reqData.Term < raftInfo.CurrentTerm || (reqData.Term == raftInfo.CurrentTerm && len(raftInfo.Log)-1 > reqData.PrevLogIndex) {
+		voteRes.Value = "false"
+	} else {
 		voteRes.Value = "true"
 		raftInfo.VotedFor = addr.String()
 		raftInfo.CurrentTerm = reqData.Term
-
-	} else {
-		voteRes.Value = "false"
 	}
+
 	voteRes.Term = raftInfo.CurrentTerm
 	jsonResp, err := json.Marshal(voteRes)
 	if err != nil {
@@ -626,7 +630,6 @@ func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < len(nodeListID); i++ {
 		go func(i int) {
-			fmt.Println("http://" + nodeListID[i] + ":8080" + "/updateNodes")
 			req, err := http.NewRequest("POST", "http://Node"+nodeListID[i]+":8080"+"/updateNodes", bytes.NewBuffer([]byte(body)))
 			req.Header.Set("Content-Type", "application/json")
 			client := &http.Client{}
@@ -652,7 +655,9 @@ func checkandUpdateReservation(w http.ResponseWriter, r *http.Request) {
 }
 
 func updateNodes(w http.ResponseWriter, r *http.Request) {
-
+	if !handleReq {
+		return
+	}
 	jsonFile, _ := os.Open("data.json")
 	defer jsonFile.Close()
 	byteValue, _ := ioutil.ReadAll(jsonFile)
